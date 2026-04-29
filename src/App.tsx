@@ -360,8 +360,25 @@ export default function App() {
   }>({ type: "P", enemy: false });
 
   const [puzzles, setPuzzles] = useState<Problem[]>(defaultPuzzles as Problem[]);
+  const isInitialMount = useRef(true);
 
   useEffect(() => {
+    // Fetch latest puzzles unconditionally on startup
+    fetch("/api/puzzles")
+      .then(res => res.json())
+      .then((data: Problem[]) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setPuzzles(data);
+        }
+      })
+      .catch(e => console.error("Failed to fetch dynamic puzzles:", e));
+  }, []);
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
     fetch("/api/save-puzzles", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
