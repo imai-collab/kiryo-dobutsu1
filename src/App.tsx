@@ -25,6 +25,15 @@ interface Problem {
 
 import defaultPuzzles from "./puzzles.json";
 
+const unpromotedToPromoted: Record<string, string> = {
+  P: "PP",
+  L: "PL",
+  N: "PN",
+  S: "PS",
+  B: "PB",
+  R: "PR",
+};
+
 const MOVES: Record<string, { dc: number; dr: number; slide?: boolean }[]> = {
   P: [{ dc: 0, dr: -1 }],
   L: [{ dc: 0, dr: -1, slide: true }],
@@ -583,6 +592,135 @@ export default function App() {
     }
   }, [selected, board]);
 
+  const [pendingPromotion, setPendingPromotion] = useState<{
+    from: string;
+    to: string;
+    handIdx?: number;
+    pieceType: PieceType;
+    isPromotionZone: boolean;
+  } | null>(null);
+
+  const executeMove = (
+    from: string | null,
+    to: string,
+    handIdx: number | undefined,
+    finalPieceType: PieceType
+  ) => {
+    const tempBoard = { ...board };
+    if (from) {
+      delete tempBoard[from];
+    }
+    tempBoard[to] = { type: finalPieceType, enemy: false };
+
+    const isSelfCheck = isKingInCheck(tempBoard, false);
+    if (isSelfCheck) {
+      setTotalMistakes((prev) => prev + 1);
+      setErrorMsg("王手されてるにゃ！");
+      setSelected(null);
+      setTimeout(() => setErrorMsg(null), 1500);
+      return;
+    }
+
+    const isCheck = isKingInCheck(tempBoard, true);
+    const enemyReplies = getLegalMoves(tempBoard, true);
+    const isCheckmate = isCheck && enemyReplies.length === 0;
+
+    if (isCheckmate) {
+      const newBoard = { ...board };
+      if (from) {
+        delete newBoard[from];
+      } else if (handIdx !== undefined) {
+        const newHand = [...hand];
+        newHand.splice(handIdx, 1);
+        setHand(newHand);
+      }
+      newBoard[to] = { type: finalPieceType, enemy: false };
+      setBoard(newBoard);
+
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+      setSolved(true);
+      setErrorMsg(null);
+      setSelected(null);
+    } else {
+      const tBoard = { ...board };
+      if (from) {
+        delete tBoard[from];
+      } else if (handIdx !== undefined) {
+        const newHand = [...hand];
+        newHand.splice(handIdx, 1);
+        setHand(newHand);
+      }
+      tBoard[to] = { type: finalPieceType, enemy: false };
+      setBoard(tBoard);
+      setSelected(null);
+      setAnimating(true);
+
+      if (!isCheck) {
+        setTimeout(() => {
+          setTotalMistakes((prev) => prev + 1);
+          setErrorMsg("王手じゃないにゃ...");
+          setTimeout(() => {
+            setBoard(currentPuzzle.board);
+            setHand(currentPuzzle.hand);
+            setErrorMsg(null);
+            setAnimating(false);
+          }, 1000);
+        }, 400);
+        return;
+      }
+
+      setTimeout(() => {
+        const replies = enemyReplies;
+        if (replies.length > 0) {
+          let reply = replies.find(
+            (rep) =>
+              rep.to === to &&
+              rep.from !== "hand" &&
+              tBoard[rep.from]?.type !== "K",
+          );
+          if (!reply) {
+            reply = replies.find((rep) => rep.to === to);
+          }
+          if (!reply) {
+            reply = replies.find(
+              (rep) => rep.from !== "hand" && tBoard[rep.from].type === "K",
+            );
+          }
+          if (!reply) {
+            reply = replies.find((rep) => rep.from !== "hand");
+          }
+          if (!reply) {
+            reply = replies.find((rep) => rep.from === "hand");
+          }
+          if (!reply) {
+            reply = replies[0];
+          }
+
+          const nextBoard = { ...tBoard };
+          if (reply.from === "hand") {
+            nextBoard[reply.to] = { type: "P", enemy: true };
+          } else {
+            const p = nextBoard[reply.from];
+            delete nextBoard[reply.from];
+            nextBoard[reply.to] = p;
+          }
+          setBoard(nextBoard);
+        }
+
+        setTimeout(() => {
+          setTotalMistakes((prev) => prev + 1);
+          setErrorMsg("防がれたにゃ...");
+          setTimeout(() => {
+            setBoard(currentPuzzle.board);
+            setHand(currentPuzzle.hand);
+            setErrorMsg(null);
+            setAnimating(false);
+          }, 1000);
+        }, 600);
+      }, 600);
+    }
+  };
+
   const handleCellClick = (c: number, r: number) => {
     if (animating) return;
 
@@ -623,144 +761,22 @@ export default function App() {
         return;
       }
 
-      const unpromotedToPromoted: Record<string, string> = {
-        P: "PP",
-        L: "PL",
-        N: "PN",
-        S: "PS",
-        B: "PB",
-        R: "PR",
-      };
-
-      let finalPieceType = selected.pieceType;
-      if (selected.from) {
+      if (selected.from && unpromotedToPromoted[selected.pieceType]) {
         const fromR = parseInt(selected.from.split(",")[1]);
         const toR = r;
-        if ((fromR === 0 || toR === 0) && unpromotedToPromoted[selected.pieceType]) {
-          const promoteRequired = (selected.pieceType === "P" || selected.pieceType === "L") && toR === 0;
-          if (promoteRequired) {
-            finalPieceType = unpromotedToPromoted[selected.pieceType] as PieceType;
-          } else {
-            if (window.confirm("成りますか？")) {
-              finalPieceType = unpromotedToPromoted[selected.pieceType] as PieceType;
-            }
-          }
-        }
-      }
-
-      const tempBoard = { ...board };
-      if (selected.from) {
-        delete tempBoard[selected.from];
-      }
-      tempBoard[key] = { type: finalPieceType, enemy: false };
-
-      const isSelfCheck = isKingInCheck(tempBoard, false);
-      if (isSelfCheck) {
-        setTotalMistakes((prev) => prev + 1);
-        setErrorMsg("王手されてるにゃ！");
-        setSelected(null);
-        setTimeout(() => setErrorMsg(null), 1500);
+        const isPromotionZone = fromR <= 2 || toR <= 2;
+        
+        setPendingPromotion({
+          from: selected.from,
+          to: key,
+          handIdx: selected.handIdx,
+          pieceType: selected.pieceType,
+          isPromotionZone
+        });
         return;
       }
 
-      const isCheck = isKingInCheck(tempBoard, true);
-      const enemyReplies = getLegalMoves(tempBoard, true);
-      const isCheckmate = isCheck && enemyReplies.length === 0;
-
-      if (isCheckmate) {
-        const newBoard = { ...board };
-        if (selected.from) {
-          delete newBoard[selected.from];
-        } else if (selected.handIdx !== undefined) {
-          const newHand = [...hand];
-          newHand.splice(selected.handIdx, 1);
-          setHand(newHand);
-        }
-        newBoard[key] = { type: finalPieceType, enemy: false };
-        setBoard(newBoard);
-
-        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-        setSolved(true);
-        setErrorMsg(null);
-        setSelected(null);
-      } else {
-        const tBoard = { ...board };
-        if (selected.from) {
-          delete tBoard[selected.from];
-        } else if (selected.handIdx !== undefined) {
-          const newHand = [...hand];
-          newHand.splice(selected.handIdx, 1);
-          setHand(newHand);
-        }
-        tBoard[key] = { type: finalPieceType, enemy: false };
-        setBoard(tBoard);
-        setSelected(null);
-        setAnimating(true);
-
-        if (!isCheck) {
-          setTimeout(() => {
-            setTotalMistakes((prev) => prev + 1);
-            setErrorMsg("王手じゃないにゃ...");
-            setTimeout(() => {
-              setBoard(currentPuzzle.board);
-              setHand(currentPuzzle.hand);
-              setErrorMsg(null);
-              setAnimating(false);
-            }, 1000);
-          }, 400);
-          return;
-        }
-
-        setTimeout(() => {
-          const replies = enemyReplies;
-          if (replies.length > 0) {
-            let reply = replies.find(
-              (rep) =>
-                rep.to === key &&
-                rep.from !== "hand" &&
-                tBoard[rep.from]?.type !== "K",
-            );
-            if (!reply) {
-              reply = replies.find((rep) => rep.to === key);
-            }
-            if (!reply) {
-              reply = replies.find(
-                (rep) => rep.from !== "hand" && tBoard[rep.from].type === "K",
-              );
-            }
-            if (!reply) {
-              reply = replies.find((rep) => rep.from !== "hand");
-            }
-            if (!reply) {
-              reply = replies.find((rep) => rep.from === "hand");
-            }
-            if (!reply) {
-              reply = replies[0];
-            }
-
-            const nextBoard = { ...tBoard };
-            if (reply.from === "hand") {
-              nextBoard[reply.to] = { type: "P", enemy: true };
-            } else {
-              const p = nextBoard[reply.from];
-              delete nextBoard[reply.from];
-              nextBoard[reply.to] = p;
-            }
-            setBoard(nextBoard);
-          }
-
-          setTimeout(() => {
-            setTotalMistakes((prev) => prev + 1);
-            setErrorMsg("防がれたにゃ...");
-            setTimeout(() => {
-              setBoard(currentPuzzle.board);
-              setHand(currentPuzzle.hand);
-              setErrorMsg(null);
-              setAnimating(false);
-            }, 1000);
-          }, 600);
-        }, 600);
-      }
+      executeMove(selected.from, key, selected.handIdx, selected.pieceType);
     } else {
       const p = board[key];
       if (p && !p.enemy) {
@@ -889,6 +905,59 @@ export default function App() {
                     </div>
                   )}
                 </div>
+
+                <AnimatePresence>
+                  {pendingPromotion && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                      className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center justify-center pointer-events-none w-full"
+                    >
+                      <div className="bg-white/85 p-4 rounded-3xl shadow-xl border-4 border-[#FFADAD]/80 flex flex-col items-center gap-3 backdrop-blur-md pointer-events-auto w-[90%] max-w-[300px]">
+                        <p className="text-lg font-bold text-[#634C32]">成りますか？</p>
+                        <div className="flex gap-4 w-full px-2">
+                          <button
+                            onClick={() => {
+                              const { from, to, pieceType, isPromotionZone, handIdx } = pendingPromotion;
+                              setPendingPromotion(null);
+                              if (isPromotionZone) {
+                                executeMove(from, to, handIdx, unpromotedToPromoted[pieceType] as PieceType);
+                              } else {
+                                setTotalMistakes((prev) => prev + 1);
+                                setErrorMsg("そこでは成れないにゃ！");
+                                setSelected(null);
+                                setTimeout(() => setErrorMsg(null), 1500);
+                              }
+                            }}
+                            className="flex-1 py-2.5 bg-[#FF5A5A]/90 text-white font-bold rounded-xl shadow-[0_3px_0_rgba(209,61,61,0.9)] active:translate-y-[3px] active:shadow-none transition-all hover:bg-[#ff7070] text-base"
+                          >
+                            はい
+                          </button>
+                          <button
+                            onClick={() => {
+                              const { from, to, pieceType, handIdx } = pendingPromotion;
+                              setPendingPromotion(null);
+                              const toR = parseInt(to.split(",")[1]);
+                              const mustPromote = (pieceType === "P" || pieceType === "L") && toR === 0 || (pieceType === "N" && toR <= 1);
+                              if (mustPromote) {
+                                setTotalMistakes((prev) => prev + 1);
+                                setErrorMsg("そこはならなきゃいけないにゃ！");
+                                setSelected(null);
+                                setTimeout(() => setErrorMsg(null), 1500);
+                              } else {
+                                executeMove(from, to, handIdx, pieceType);
+                              }
+                            }}
+                            className="flex-1 py-2.5 bg-[#4A7A4A]/90 text-white font-bold rounded-xl shadow-[0_3px_0_rgba(54,94,54,0.9)] active:translate-y-[3px] active:shadow-none transition-all hover:bg-[#5b945b] text-base"
+                          >
+                            いいえ
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 {/* Board */}
                 <div className="grid grid-cols-5 grid-rows-5 gap-[4px] md:gap-[8px] bg-[#C3A16A] p-[8px] md:p-[12px] rounded-[16px] shadow-[inset_0_4px_8px_rgba(0,0,0,0.15)] w-full max-w-[360px] aspect-square mx-auto">
